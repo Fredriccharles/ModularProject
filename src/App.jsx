@@ -96,9 +96,9 @@ function App({ user, onLogout }) {
   useEffect(() => { snapEnabledRef.current  = snapEnabled; }, [snapEnabled]);
   useEffect(() => { sidebarOpenRef.current  = sidebarOpen; }, [sidebarOpen]);
 
-  // ── Load workspace from Supabase on mount ───────────────────────────────
-  // We use a ref to track the "snapshot" that was just loaded so the save
-  // effect can tell the difference between "just loaded" and "user changed".
+  // ── Load workspace from Supabase on mount ──────────────────────────────
+  // justLoadedRef: lets the save effect skip the very first fire that happens
+  // right after load completes — preventing an immediate overwrite with stale state.
   const justLoadedRef = useRef(false);
 
   useEffect(() => {
@@ -111,28 +111,26 @@ function App({ user, onLogout }) {
           .from("workspaces")
           .select("widgets, offset_x, offset_y, zoom")
           .eq("user_id", user.id)
-          .maybeSingle(); // ← maybeSingle() returns null (not error) when no row exists
+          .maybeSingle(); // returns null (not error) when no row exists yet
 
         if (error) {
-          console.error("[load] Supabase error:", error.message);
+          console.error("[workspace] Load error:", error.message);
         }
 
         if (data) {
-          // Validate widgets array before applying — never set corrupted data
           const safeWidgets = Array.isArray(data.widgets) ? data.widgets : [];
-          console.log("[load] Restoring", safeWidgets.length, "widgets");
+          console.log("[workspace] Loaded", safeWidgets.length, "widgets");
           setWidgets(safeWidgets);
           setOffset({ x: data.offset_x ?? 0, y: data.offset_y ?? 0 });
           setZoom(data.zoom ?? 1);
         } else {
-          console.log("[load] No saved workspace found — starting fresh");
+          console.log("[workspace] No existing workspace — starting fresh");
         }
       } catch (err) {
-        console.error("[load] Unexpected error:", err);
+        console.error("[workspace] Unexpected load error:", err);
       }
 
-      // Mark load done. Set justLoadedRef BEFORE setLoaded so the save
-      // effect sees it as true on its first run.
+      // Set justLoadedRef TRUE before setLoaded so the save effect sees it
       justLoadedRef.current = true;
       setLoaded(true);
     }
@@ -140,14 +138,13 @@ function App({ user, onLogout }) {
     loadWorkspace();
   }, [user.id]);
 
-  // ── Auto-save widgets to Supabase (debounced 1.5s) ───────────────────────
-  // KEY FIX: justLoadedRef lets us skip the very first save trigger that
-  // fires when `loaded` flips to true. After that first skip, we reset it
-  // so all subsequent widget changes save normally.
+  // ── Auto-save to Supabase (debounced 1.5s) ──────────────────────────────
+  // Skips the very first run (right after load) using justLoadedRef.
+  // All subsequent user-triggered changes save normally.
   useEffect(() => {
     if (!loaded) return;
 
-    // Skip the immediate fire after load completes — data hasn't changed
+    // First run after load: skip save, reset the flag, do nothing
     if (justLoadedRef.current) {
       justLoadedRef.current = false;
       return;
@@ -156,16 +153,16 @@ function App({ user, onLogout }) {
     clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(async () => {
       setSaving(true);
-      console.log("[save] Saving", widgets.length, "widgets...");
+      console.log("[workspace] Saving", widgets.length, "widgets...");
       const { error } = await supabase.from("workspaces").upsert({
         user_id:  user.id,
-        widgets,         // ← full widget objects including all internal data
+        widgets,
         offset_x: offset.x,
         offset_y: offset.y,
         zoom,
       }, { onConflict: "user_id" });
-      if (error) console.error("[save] Save failed:", error.message);
-      else console.log("[save] Saved OK");
+      if (error) console.error("[workspace] Save error:", error.message);
+      else console.log("[workspace] Saved successfully");
       setSaving(false);
     }, 1500);
   }, [loaded, widgets, offset, zoom]);
