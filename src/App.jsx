@@ -96,39 +96,76 @@ function App({ user, onLogout }) {
   useEffect(() => { snapEnabledRef.current  = snapEnabled; }, [snapEnabled]);
   useEffect(() => { sidebarOpenRef.current  = sidebarOpen; }, [sidebarOpen]);
 
-  // ── Load workspace from Supabase on mount ─────────────────────────────
+  // ── Load workspace from Supabase on mount ───────────────────────────────
+  // We use a ref to track the "snapshot" that was just loaded so the save
+  // effect can tell the difference between "just loaded" and "user changed".
+  const justLoadedRef = useRef(false);
+
   useEffect(() => {
     setLoaded(false);
+    justLoadedRef.current = false;
+
     async function loadWorkspace() {
-      const { data, error } = await supabase
-        .from("workspaces")
-        .select("*")
-        .eq("user_id", user.id)
-        .single();
-      if (data && !error) {
-        setWidgets(data.widgets   || []);
-        setOffset({ x: data.offset_x ?? 0, y: data.offset_y ?? 0 });
-        setZoom(data.zoom ?? 1);
+      try {
+        const { data, error } = await supabase
+          .from("workspaces")
+          .select("widgets, offset_x, offset_y, zoom")
+          .eq("user_id", user.id)
+          .maybeSingle(); // ← maybeSingle() returns null (not error) when no row exists
+
+        if (error) {
+          console.error("[load] Supabase error:", error.message);
+        }
+
+        if (data) {
+          // Validate widgets array before applying — never set corrupted data
+          const safeWidgets = Array.isArray(data.widgets) ? data.widgets : [];
+          console.log("[load] Restoring", safeWidgets.length, "widgets");
+          setWidgets(safeWidgets);
+          setOffset({ x: data.offset_x ?? 0, y: data.offset_y ?? 0 });
+          setZoom(data.zoom ?? 1);
+        } else {
+          console.log("[load] No saved workspace found — starting fresh");
+        }
+      } catch (err) {
+        console.error("[load] Unexpected error:", err);
       }
-      setLoaded(true); // ← triggers save effect to re-run
+
+      // Mark load done. Set justLoadedRef BEFORE setLoaded so the save
+      // effect sees it as true on its first run.
+      justLoadedRef.current = true;
+      setLoaded(true);
     }
+
     loadWorkspace();
   }, [user.id]);
 
-  // ── Auto-save to Supabase (debounced 1.5s) ───────────────────────────
-  // loaded is in deps so this re-runs when load completes → saves immediately after load
+  // ── Auto-save widgets to Supabase (debounced 1.5s) ───────────────────────
+  // KEY FIX: justLoadedRef lets us skip the very first save trigger that
+  // fires when `loaded` flips to true. After that first skip, we reset it
+  // so all subsequent widget changes save normally.
   useEffect(() => {
     if (!loaded) return;
+
+    // Skip the immediate fire after load completes — data hasn't changed
+    if (justLoadedRef.current) {
+      justLoadedRef.current = false;
+      return;
+    }
+
     clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(async () => {
       setSaving(true);
-      await supabase.from("workspaces").upsert({
+      console.log("[save] Saving", widgets.length, "widgets...");
+      const { error } = await supabase.from("workspaces").upsert({
         user_id:  user.id,
-        widgets,
+        widgets,         // ← full widget objects including all internal data
         offset_x: offset.x,
         offset_y: offset.y,
         zoom,
       }, { onConflict: "user_id" });
+      if (error) console.error("[save] Save failed:", error.message);
+      else console.log("[save] Saved OK");
       setSaving(false);
     }, 1500);
   }, [loaded, widgets, offset, zoom]);
