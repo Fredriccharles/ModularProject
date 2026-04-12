@@ -18,44 +18,43 @@ export function WidgetShell({
   updateAllWidgets,
 }) {
   const [hovered, setHovered] = useState(false);
-  const color = getColor(data.colorId);
+  const color  = getColor(data.colorId);
+  const locked = !!data.locked;
 
-  // ── Group drag: snapshot world positions when drag STARTS ─────────────
-  // We track the delta between drag-start position and drag-stop position
-  // in world coords (Rnd gives us world coords directly since the parent
-  // transform is applied outside Rnd). All selected widgets shift by that delta.
-  const dragStartWorld = useRef(null); // { x, y } of THIS widget when drag began
+  // ── FEATURE 3: Group drag ─────────────────────────────────────────────
+  // Snapshot every selected widget's world position at drag start.
+  // On stop, compute delta from this widget's movement, apply to all.
+  const dragSnapRef = useRef(null);
 
   function handleDragStart(e, d) {
     if (isSelected && selectedIds.length > 1) {
-      // Snapshot world positions of all selected widgets
       const map = {};
       allWidgets.forEach((w) => {
         if (selectedIds.includes(w.id)) map[w.id] = { x: w.x, y: w.y };
       });
-      dragStartWorld.current = { map, originX: d.x, originY: d.y };
+      dragSnapRef.current = { map, originX: d.x, originY: d.y };
     } else {
-      dragStartWorld.current = null;
+      dragSnapRef.current = null;
     }
   }
 
   function handleDragStop(e, d) {
-    if (dragStartWorld.current && isSelected && selectedIds.length > 1) {
-      const dx = d.x - dragStartWorld.current.originX;
-      const dy = d.y - dragStartWorld.current.originY;
+    if (dragSnapRef.current && isSelected && selectedIds.length > 1) {
+      const dx = d.x - dragSnapRef.current.originX;
+      const dy = d.y - dragSnapRef.current.originY;
       updateAllWidgets(
-        selectedIds.map((id) => ({
+        Object.keys(dragSnapRef.current.map).map((id) => ({
           id,
           changes: {
-            x: dragStartWorld.current.map[id].x + dx,
-            y: dragStartWorld.current.map[id].y + dy,
+            x: dragSnapRef.current.map[id].x + dx,
+            y: dragSnapRef.current.map[id].y + dy,
           },
         }))
       );
     } else {
       updateWidget(data.id, { x: d.x, y: d.y });
     }
-    dragStartWorld.current = null;
+    dragSnapRef.current = null;
   }
 
   function handleResizeStop(e, direction, ref, delta, position) {
@@ -64,12 +63,22 @@ export function WidgetShell({
     updateWidget(data.id, { width: w, height: h, ...position });
   }
 
-  const borderColor = isSelected
-    ? "#8b5cf6"
-    : hovered ? color.accent + "66"
+  // ── FEATURE 4: Lock toggle ────────────────────────────────────────────
+  function toggleLock(e) {
+    e.stopPropagation();
+    updateWidget(data.id, { locked: !locked });
+  }
+
+  // ── Styles ────────────────────────────────────────────────────────────
+  const borderColor = locked
+    ? color.border + "66"
+    : isSelected ? "#8b5cf6"
+    : hovered    ? color.accent + "66"
     : color.border;
 
-  const boxShadow = isSelected
+  const boxShadow = locked
+    ? "0 2px 8px rgba(0,0,0,0.15)"
+    : isSelected
     ? `0 0 0 2px #8b5cf6, 0 20px 48px rgba(0,0,0,0.6)`
     : hovered
     ? `0 20px 48px rgba(0,0,0,0.6), 0 0 0 1px ${color.accent}22`
@@ -86,14 +95,17 @@ export function WidgetShell({
       cancel="input,textarea,button,a,[data-no-drag]"
       minWidth={minWidth}
       minHeight={minHeight}
-      enableResizing={!noResize}
+      enableResizing={!noResize && !locked}
+      disableDragging={locked}
       className="rnd-widget"
       style={{ zIndex: isSelected ? 20 : hovered ? 10 : 1 }}
     >
       <div
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        onMouseDown={(e) => { if (onSelect) onSelect(data.id, e); }}
+        onMouseDown={(e) => {
+          if (!locked && onSelect) onSelect(data.id, e);
+        }}
         style={{
           width: "100%", height: "100%",
           background: color.bg,
@@ -103,26 +115,28 @@ export function WidgetShell({
           overflow: "hidden", boxShadow,
           transition: "box-shadow 0.2s ease, border-color 0.15s ease",
           fontFamily: "'DM Sans', sans-serif",
-          cursor: "default",
+          opacity: locked ? 0.82 : 1,
         }}
       >
         {/* Accent bar */}
         <div style={{
           height: "2px",
-          background: isSelected ? "#8b5cf6" : color.accent,
+          background: locked ? color.accent + "33" : isSelected ? "#8b5cf6" : color.accent,
           flexShrink: 0, transition: "background 0.15s",
         }} />
 
-        {/* Drag handle header */}
+        {/* Header */}
         <div
           className="widget-drag-handle"
           style={{
             display: "flex", justifyContent: "space-between", alignItems: "center",
             padding: "9px 12px 8px",
             borderBottom: `1px solid ${color.border}`,
-            cursor: "grab", flexShrink: 0, userSelect: "none",
+            cursor: locked ? "default" : "grab",
+            flexShrink: 0, userSelect: "none",
           }}
         >
+          {/* Left: color dot + label */}
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <ColorPicker
               colorId={data.colorId}
@@ -130,29 +144,59 @@ export function WidgetShell({
             />
             <span style={{
               fontSize: "11px", fontWeight: 600,
-              color: isSelected ? "#8b5cf6bb" : color.accent + "aa",
+              color: locked ? color.accent + "44" : isSelected ? "#8b5cf6bb" : color.accent + "aa",
               letterSpacing: "0.06em", textTransform: "uppercase",
               transition: "color 0.15s",
             }}>
               {label}
             </span>
+            {locked && (
+              <span style={{ fontSize: "10px", opacity: 0.45 }}>🔒</span>
+            )}
           </div>
 
-          <button
-            onClick={(e) => { e.stopPropagation(); deleteWidget(data.id); }}
-            onMouseDown={(e) => e.stopPropagation()}
-            style={{
-              width: "20px", height: "20px",
-              background: "transparent", border: "none",
-              borderRadius: "4px", color: "#444",
-              fontSize: "12px", cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              padding: 0, lineHeight: 1, flexShrink: 0,
-              transition: "background 0.15s, color 0.15s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "#2e2e2e"; e.currentTarget.style.color = "#ff5f57"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#444"; }}
-          >✕</button>
+          {/* Right: lock + close */}
+          <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+            <button
+              onClick={toggleLock}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={locked ? "Unlock" : "Lock"}
+              style={{
+                width: "20px", height: "20px",
+                background: locked ? color.accent + "22" : "transparent",
+                border: "none", borderRadius: "4px",
+                color: locked ? color.accent : "#3a3a3a",
+                fontSize: "11px", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: 0, lineHeight: 1, flexShrink: 0,
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = color.accent + "22";
+                e.currentTarget.style.color = color.accent;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = locked ? color.accent + "22" : "transparent";
+                e.currentTarget.style.color = locked ? color.accent : "#3a3a3a";
+              }}
+            >{locked ? "🔒" : "🔓"}</button>
+
+            <button
+              onClick={(e) => { e.stopPropagation(); deleteWidget(data.id); }}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                width: "20px", height: "20px",
+                background: "transparent", border: "none",
+                borderRadius: "4px", color: "#444",
+                fontSize: "12px", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: 0, lineHeight: 1, flexShrink: 0,
+                transition: "background 0.15s, color 0.15s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "#2e2e2e"; e.currentTarget.style.color = "#ff5f57"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#444"; }}
+            >✕</button>
+          </div>
         </div>
 
         {/* Body */}
