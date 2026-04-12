@@ -5,6 +5,11 @@ import ClockWidget    from "./components/widgets/ClockWidget";
 import PomodoroWidget from "./components/widgets/PomodoroWidget";
 import CalendarWidget from "./components/widgets/CalendarWidget.jsx";
 import { WIDGET_COLORS } from "./components/widgets/widgetColors.jsx";
+import KanbanWidget from "./components/widgets/KanbanWidget.jsx";
+import WhiteboardWidget from "./components/widgets/Whiteboardwidget.jsx";
+import PdfWidget from "./components/widgets/Pdfwidget.jsx";
+import IdeaGeneratorWidget from "./components/widgets/IdeaGeneratorWidget.jsx";
+import MiniMap from "./components/MiniMap.jsx";
 import { supabase } from "./supabaseClient";
 
 let colorIndex = 0;
@@ -16,6 +21,10 @@ const WIDGET_CATALOGUE = [
   { type: "clock",    icon: "◷",  label: "Clock",    w: 260, h: 120 },
   { type: "pomodoro", icon: "⏱",  label: "Pomodoro", w: 240, h: 260 },
   { type: "calendar", icon: "📅", label: "Calendar", w: 680, h: 480 },
+  { type: "kanban",     icon: "🗂",  label: "Kanban",  w: 560, h: 380 },
+  { type: "whiteboard", icon: "🧩",  label: "Draw",    w: 500, h: 400 },
+  { type: "pdf",        icon: "📄",  label: "PDF",     w: 520, h: 520 },
+  { type: "idea",       icon: "✦",   label: "Ideas",   w: 300, h: 340 },
 ];
 
 const THEMES = {
@@ -55,7 +64,8 @@ function App({ user, onLogout }) {
   const [theme,        setTheme]        = useState("dark");
   const [snapEnabled,  setSnapEnabled]  = useState(false);
   const [bgImage,      setBgImage]      = useState(null);
-  const [saving,       setSaving]       = useState(false); // ✅ save indicator
+  const [saving,       setSaving]       = useState(false);
+  const [loaded,       setLoaded]       = useState(false);
 
   const T = THEMES[theme];
 
@@ -75,7 +85,7 @@ function App({ user, onLogout }) {
   const selectionBoxRef = useRef(null);
   const dragGhostRef    = useRef(null);
   const bgInputRef      = useRef(null);
-  const saveTimeout     = useRef(null); // ✅ debounce ref
+  const saveTimeout     = useRef(null);
 
   useEffect(() => { offsetRef.current      = offset; },      [offset]);
   useEffect(() => { zoomRef.current        = zoom; },        [zoom]);
@@ -88,24 +98,27 @@ function App({ user, onLogout }) {
 
   // ── Load workspace from Supabase on mount ─────────────────────────────
   useEffect(() => {
+    setLoaded(false);
     async function loadWorkspace() {
       const { data, error } = await supabase
         .from("workspaces")
         .select("*")
         .eq("user_id", user.id)
         .single();
-
       if (data && !error) {
         setWidgets(data.widgets   || []);
         setOffset({ x: data.offset_x ?? 0, y: data.offset_y ?? 0 });
         setZoom(data.zoom ?? 1);
       }
+      setLoaded(true); // ← triggers save effect to re-run
     }
     loadWorkspace();
   }, [user.id]);
 
   // ── Auto-save to Supabase (debounced 1.5s) ───────────────────────────
+  // loaded is in deps so this re-runs when load completes → saves immediately after load
   useEffect(() => {
+    if (!loaded) return;
     clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(async () => {
       setSaving(true);
@@ -118,7 +131,7 @@ function App({ user, onLogout }) {
       }, { onConflict: "user_id" });
       setSaving(false);
     }, 1500);
-  }, [widgets, offset, zoom]);
+  }, [loaded, widgets, offset, zoom]);
 
   // ── CRUD ──────────────────────────────────────────────────────────────
   function addWidget(type, screenX, screenY) {
@@ -592,6 +605,10 @@ function App({ user, onLogout }) {
               if (w.type === "clock")    return <ClockWidget    {...p} />;
               if (w.type === "pomodoro") return <PomodoroWidget {...p} />;
               if (w.type === "calendar") return <CalendarWidget {...p} />;
+              if (w.type === "kanban")     return <KanbanWidget        {...p} />;
+              if (w.type === "whiteboard") return <WhiteboardWidget    {...p} />;
+              if (w.type === "pdf")        return <PdfWidget           {...p} />;
+              if (w.type === "idea")       return <IdeaGeneratorWidget {...p} />;
               return null;
             })}
           </div>
@@ -627,8 +644,26 @@ function App({ user, onLogout }) {
             </div>
           )}
 
+          {/* Loading spinner */}
+          {!loaded && (
+            <div style={{
+              position: "absolute", inset: 0, zIndex: 50,
+              display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center",
+              gap: "12px", background: T.bg,
+            }}>
+              <div style={{
+                width: "32px", height: "32px", borderRadius: "50%",
+                border: `3px solid ${T.borderSub}`, borderTopColor: "#8b5cf6",
+                animation: "spin 0.7s linear infinite",
+              }} />
+              <p style={{ fontSize: "12px", color: T.textMuted, margin: 0 }}>Loading workspace…</p>
+              <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+            </div>
+          )}
+
           {/* Empty state */}
-          {widgets.length === 0 && (
+          {loaded && widgets.length === 0 && (
             <div style={{
               position: "absolute", inset: 0,
               display: "flex", flexDirection: "column",
@@ -670,6 +705,9 @@ function App({ user, onLogout }) {
             )}
             <input ref={bgInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleBgUpload} />
           </div>
+
+          {/* MiniMap — top right corner of canvas */}
+          <MiniMap widgets={widgets} offset={offset} zoom={zoom} setOffset={(o) => { offsetRef.current = o; setOffset(o); }} />
         </div>
       </div>
     </div>
@@ -742,4 +780,4 @@ function ZoomBtn({ label, onClick, T }) {
   );
 }
 
-export default App; 
+export default App;
