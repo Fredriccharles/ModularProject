@@ -9,6 +9,9 @@ import KanbanWidget from "./components/widgets/KanbanWidget.jsx";
 import WhiteboardWidget from "./components/widgets/Whiteboardwidget.jsx";
 import PdfWidget from "./components/widgets/Pdfwidget.jsx";
 import IdeaGeneratorWidget from "./components/widgets/IdeaGeneratorWidget.jsx";
+import WeatherWidget      from "./components/widgets/WeatherWidget.jsx";
+import NewsFeedWidget     from "./components/widgets/NewsFeedWidget.jsx";
+import VisionBoardWidget  from "./components/widgets/VisionBoardWidget.jsx";
 import MiniMap from "./components/MiniMap.jsx";
 import { supabase } from "./supabaseClient";
 
@@ -24,7 +27,10 @@ const WIDGET_CATALOGUE = [
   { type: "kanban",     icon: "🗂",  label: "Kanban",  w: 560, h: 380 },
   { type: "whiteboard", icon: "🧩",  label: "Draw",    w: 500, h: 400 },
   { type: "pdf",        icon: "📄",  label: "PDF",     w: 520, h: 520 },
-  { type: "idea",       icon: "✦",   label: "Ideas",   w: 300, h: 340 },
+  { type: "idea",        icon: "✦",   label: "Ideas",    w: 300, h: 340 },
+  { type: "weather",     icon: "🌤",  label: "Weather",   w: 240, h: 200 },
+  { type: "news",        icon: "📰",  label: "News",      w: 320, h: 400 },
+  { type: "visionboard", icon: "🖼",  label: "Vision",    w: 600, h: 460 },
 ];
 
 const THEMES = {
@@ -96,73 +102,39 @@ function App({ user, onLogout }) {
   useEffect(() => { snapEnabledRef.current  = snapEnabled; }, [snapEnabled]);
   useEffect(() => { sidebarOpenRef.current  = sidebarOpen; }, [sidebarOpen]);
 
-  // ── Load workspace from Supabase on mount ──────────────────────────────
-  // justLoadedRef: lets the save effect skip the very first fire that happens
-  // right after load completes — preventing an immediate overwrite with stale state.
-  const justLoadedRef = useRef(false);
-
+  // ── Load workspace from Supabase on mount ─────────────────────────────
   useEffect(() => {
     setLoaded(false);
-    justLoadedRef.current = false;
-
     async function loadWorkspace() {
-      try {
-        const { data, error } = await supabase
-          .from("workspaces")
-          .select("widgets, offset_x, offset_y, zoom")
-          .eq("user_id", user.id)
-          .maybeSingle(); // returns null (not error) when no row exists yet
-
-        if (error) {
-          console.error("[workspace] Load error:", error.message);
-        }
-
-        if (data) {
-          const safeWidgets = Array.isArray(data.widgets) ? data.widgets : [];
-          console.log("[workspace] Loaded", safeWidgets.length, "widgets");
-          setWidgets(safeWidgets);
-          setOffset({ x: data.offset_x ?? 0, y: data.offset_y ?? 0 });
-          setZoom(data.zoom ?? 1);
-        } else {
-          console.log("[workspace] No existing workspace — starting fresh");
-        }
-      } catch (err) {
-        console.error("[workspace] Unexpected load error:", err);
+      const { data, error } = await supabase
+        .from("workspaces")
+        .select("*")
+        .eq("user_id", user.id)
+        .single();
+      if (data && !error) {
+        setWidgets(data.widgets   || []);
+        setOffset({ x: data.offset_x ?? 0, y: data.offset_y ?? 0 });
+        setZoom(data.zoom ?? 1);
       }
-
-      // Set justLoadedRef TRUE before setLoaded so the save effect sees it
-      justLoadedRef.current = true;
-      setLoaded(true);
+      setLoaded(true); // ← triggers save effect to re-run
     }
-
     loadWorkspace();
   }, [user.id]);
 
-  // ── Auto-save to Supabase (debounced 1.5s) ──────────────────────────────
-  // Skips the very first run (right after load) using justLoadedRef.
-  // All subsequent user-triggered changes save normally.
+  // ── Auto-save to Supabase (debounced 1.5s) ───────────────────────────
+  // loaded is in deps so this re-runs when load completes → saves immediately after load
   useEffect(() => {
     if (!loaded) return;
-
-    // First run after load: skip save, reset the flag, do nothing
-    if (justLoadedRef.current) {
-      justLoadedRef.current = false;
-      return;
-    }
-
     clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(async () => {
       setSaving(true);
-      console.log("[workspace] Saving", widgets.length, "widgets...");
-      const { error } = await supabase.from("workspaces").upsert({
+      await supabase.from("workspaces").upsert({
         user_id:  user.id,
         widgets,
         offset_x: offset.x,
         offset_y: offset.y,
         zoom,
       }, { onConflict: "user_id" });
-      if (error) console.error("[workspace] Save error:", error.message);
-      else console.log("[workspace] Saved successfully");
       setSaving(false);
     }, 1500);
   }, [loaded, widgets, offset, zoom]);
@@ -385,15 +357,18 @@ function App({ user, onLogout }) {
   }
 
   // ── Zoom ──────────────────────────────────────────────────────────────
+  // Ctrl+Wheel OR Ctrl+Shift+Wheel both zoom, centered on cursor
   function onWheel(e) {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    const rect    = e.currentTarget.getBoundingClientRect();
-    const cx      = e.clientX - rect.left;
-    const cy      = e.clientY - rect.top;
-    const o       = offsetRef.current;
-    const z       = zoomRef.current;
-    const newZoom = Math.min(Math.max(z - e.deltaY * 0.001, 0.2), 3);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const cx   = e.clientX - rect.left;
+    const cy   = e.clientY - rect.top;
+    const o    = offsetRef.current;
+    const z    = zoomRef.current;
+    // Shift makes it faster (3x), plain ctrl is fine-grained
+    const sensitivity = e.shiftKey ? 0.004 : 0.0012;
+    const newZoom = Math.min(Math.max(z - e.deltaY * sensitivity, 0.1), 5);
     const wx = (cx - o.x) / z;
     const wy = (cy - o.y) / z;
     const newOff = { x: cx - wx * newZoom, y: cy - wy * newZoom };
@@ -408,7 +383,7 @@ function App({ user, onLogout }) {
     const cy = (window.innerHeight - 48) / 2;
     const o  = offsetRef.current;
     const z  = zoomRef.current;
-    const nz = Math.min(Math.max(z + delta, 0.2), 3);
+    const nz = Math.min(Math.max(z + delta, 0.1), 5);
     const no = { x: cx - ((cx - o.x) / z) * nz, y: cy - ((cy - o.y) / z) * nz };
     offsetRef.current = no;
     zoomRef.current   = nz;
@@ -482,26 +457,11 @@ function App({ user, onLogout }) {
           </div>
         </div>
 
-        {/* Right: save indicator + zoom */}
+        {/* Right: save indicator only — zoom moved to bottom-right overlay */}
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          {/* ✅ Save status */}
           <span style={{ fontSize: "11px", color: saving ? "#8b5cf6" : T.textMuted, transition: "color 0.3s" }}>
             {saving ? "Saving…" : "Saved ✓"}
           </span>
-
-          <ZoomBtn label="−" onClick={() => zoomBy(-0.15)} T={T} />
-          <button
-            onClick={zoomReset} data-no-pan="true"
-            style={{
-              background: "transparent", border: `1px solid ${T.borderSub}`,
-              borderRadius: "6px", color: T.textDim, fontSize: "11px",
-              padding: "4px 8px", cursor: "pointer", fontFamily: "inherit",
-              minWidth: "46px", transition: "all 0.15s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = T.text; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = T.textDim; }}
-          >{Math.round(zoom * 100)}%</button>
-          <ZoomBtn label="+" onClick={() => zoomBy(0.15)} T={T} />
         </div>
       </div>
 
@@ -642,7 +602,10 @@ function App({ user, onLogout }) {
               if (w.type === "kanban")     return <KanbanWidget        {...p} />;
               if (w.type === "whiteboard") return <WhiteboardWidget    {...p} />;
               if (w.type === "pdf")        return <PdfWidget           {...p} />;
-              if (w.type === "idea")       return <IdeaGeneratorWidget {...p} />;
+              if (w.type === "idea")        return <IdeaGeneratorWidget {...p} />;
+              if (w.type === "weather")     return <WeatherWidget       {...p} />;
+              if (w.type === "news")        return <NewsFeedWidget      {...p} />;
+              if (w.type === "visionboard") return <VisionBoardWidget   {...p} />;
               return null;
             })}
           </div>
@@ -738,6 +701,47 @@ function App({ user, onLogout }) {
               <ToolBtn icon="✕" label="Remove background" active={false} onClick={() => setBgImage(null)} T={T} />
             )}
             <input ref={bgInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleBgUpload} />
+          </div>
+
+          {/* ── Floating zoom controls — bottom-right ── */}
+          <div data-no-pan="true" style={{
+            position: "absolute", bottom: "20px", right: "20px",
+            display: "flex", alignItems: "center", gap: "6px",
+            background: T.toolbarBg,
+            border: `1px solid ${T.border}`,
+            borderRadius: "12px", padding: "6px 10px",
+            zIndex: 1000, boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+            userSelect: "none",
+          }}>
+            <button data-no-pan="true" onClick={() => zoomBy(-0.2)} style={{
+              width: "32px", height: "32px", borderRadius: "8px",
+              border: "none", background: "transparent",
+              color: T.textDim, fontSize: "18px", fontWeight: 700,
+              cursor: "pointer", display: "flex", alignItems: "center",
+              justifyContent: "center", lineHeight: 1, transition: "all 0.12s",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = T.hoverBg; e.currentTarget.style.color = T.text; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.textDim; }}
+            >−</button>
+            <button data-no-pan="true" onClick={zoomReset} style={{
+              minWidth: "52px", height: "32px", borderRadius: "8px",
+              border: `1px solid ${T.borderSub}`, background: "transparent",
+              color: T.textDim, fontSize: "12px", fontWeight: 600,
+              cursor: "pointer", fontFamily: "inherit", transition: "all 0.12s",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = T.text; e.currentTarget.style.borderColor = T.textMuted; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = T.textDim; e.currentTarget.style.borderColor = T.borderSub; }}
+            >{Math.round(zoom * 100)}%</button>
+            <button data-no-pan="true" onClick={() => zoomBy(0.2)} style={{
+              width: "32px", height: "32px", borderRadius: "8px",
+              border: "none", background: "transparent",
+              color: T.textDim, fontSize: "18px", fontWeight: 700,
+              cursor: "pointer", display: "flex", alignItems: "center",
+              justifyContent: "center", lineHeight: 1, transition: "all 0.12s",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = T.hoverBg; e.currentTarget.style.color = T.text; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.textDim; }}
+            >+</button>
           </div>
 
           {/* MiniMap — top right corner of canvas */}

@@ -121,7 +121,7 @@ export function WidgetShell({
         {/* Accent bar */}
         <div style={{
           height: "2px",
-          background: locked ? color.accent + "33" : isSelected ? "#8b5cf6" : color.accent,
+          background: locked ? color.accent + "33" : isSelected ? "#f7f7f7" : color.accent,
           flexShrink: 0, transition: "background 0.15s",
         }} />
 
