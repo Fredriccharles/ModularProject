@@ -9,9 +9,9 @@ import KanbanWidget from "./components/widgets/KanbanWidget.jsx";
 import WhiteboardWidget from "./components/widgets/Whiteboardwidget.jsx";
 import PdfWidget from "./components/widgets/Pdfwidget.jsx";
 import IdeaGeneratorWidget from "./components/widgets/IdeaGeneratorWidget.jsx";
-import WeatherWidget      from "./components/widgets/WeatherWidget.jsx";
-import NewsFeedWidget     from "./components/widgets/NewsFeedWidget.jsx";
-import VisionBoardWidget  from "./components/widgets/VisionBoardWidget.jsx";
+import WeatherWidget      from "./components/widgets/Weatherwidget.jsx";
+import NewsFeedWidget     from "./components/widgets/NewsFeedwidget.jsx";
+import VisionBoardWidget  from "./components/widgets/Visionboardwidget.jsx";
 import MiniMap from "./components/MiniMap.jsx";
 import { supabase } from "./supabaseClient";
 
