@@ -1,79 +1,128 @@
-import { useEffect, useState } from "react";
+// WeatherWidget.jsx
+// Uses open-meteo.com (free, no API key, CORS-friendly)
+// + nominatim.openstreetmap.org for geocoding (also free, no key)
+
+import { useEffect, useState, useCallback } from "react";
 import { WidgetShell } from "./Widgetshell.jsx";
 import { getColor } from "./widgetColors.jsx";
 
-const CONDITIONS = {
-  0:  { label: "Clear",        icon: "☀️" },
-  1:  { label: "Mainly Clear", icon: "🌤" },
-  2:  { label: "Partly Cloudy",icon: "⛅" },
-  3:  { label: "Overcast",     icon: "☁️" },
-  45: { label: "Foggy",        icon: "🌫" },
-  48: { label: "Icy Fog",      icon: "🌫" },
-  51: { label: "Light Drizzle",icon: "🌦" },
-  61: { label: "Light Rain",   icon: "🌧" },
-  63: { label: "Rain",         icon: "🌧" },
-  65: { label: "Heavy Rain",   icon: "🌧" },
-  71: { label: "Light Snow",   icon: "🌨" },
-  73: { label: "Snow",         icon: "❄️" },
-  80: { label: "Showers",      icon: "🌦" },
-  95: { label: "Thunderstorm", icon: "⛈" },
+// WMO weather code → description + emoji
+const WMO = {
+  0:  ["Clear sky",       "☀️"],
+  1:  ["Mainly clear",    "🌤️"],
+  2:  ["Partly cloudy",   "⛅"],
+  3:  ["Overcast",        "☁️"],
+  45: ["Foggy",           "🌫️"],
+  48: ["Depositing rime", "🌫️"],
+  51: ["Light drizzle",   "🌦️"],
+  53: ["Drizzle",         "🌦️"],
+  55: ["Dense drizzle",   "🌧️"],
+  61: ["Slight rain",     "🌧️"],
+  63: ["Moderate rain",   "🌧️"],
+  65: ["Heavy rain",      "🌧️"],
+  71: ["Slight snow",     "🌨️"],
+  73: ["Moderate snow",   "❄️"],
+  75: ["Heavy snow",      "❄️"],
+  77: ["Snow grains",     "❄️"],
+  80: ["Slight showers",  "🌦️"],
+  81: ["Moderate showers","🌧️"],
+  82: ["Violent showers", "⛈️"],
+  85: ["Snow showers",    "🌨️"],
+  86: ["Heavy snow showers","❄️"],
+  95: ["Thunderstorm",    "⛈️"],
+  96: ["Thunderstorm + hail","⛈️"],
+  99: ["Thunderstorm + heavy hail","⛈️"],
 };
 
-function getCondition(code) {
-  return CONDITIONS[code] ?? { label: "Unknown", icon: "🌡" };
+function getWMO(code) {
+  return WMO[code] ?? ["Unknown", "🌡️"];
 }
 
-export default function WeatherWidget({ data, updateWidget, deleteWidget, isSelected, onSelect, selectedIds, allWidgets, updateAllWidgets }) {
+export default function WeatherWidget({
+  data, updateWidget, deleteWidget,
+  isSelected, onSelect, selectedIds, allWidgets, updateAllWidgets,
+}) {
   const color = getColor(data.colorId);
-  const [weather,   setWeather]   = useState(null);
-  const [city,      setCity]      = useState(data.city || "");
-  const [editCity,  setEditCity]  = useState(!data.city);
-  const [cityInput, setCityInput] = useState(data.city || "");
-  const [loading,   setLoading]   = useState(false);
-  const [error,     setError]     = useState("");
-  const [unit,      setUnit]      = useState(data.unit || "C"); // C or F
 
-  // Fetch on mount if city stored
+  const [weather,    setWeather]    = useState(null);   // fetched result
+  const [unit,       setUnit]       = useState(data.unit || "C");
+  const [cityInput,  setCityInput]  = useState(data.savedCity || "");
+  const [searching,  setSearching]  = useState(!data.savedCity); // show input if no city saved
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState("");
+
+  // ── Auto-load saved city on mount ────────────────────────────────────
   useEffect(() => {
-    if (data.city) fetchWeather(data.city);
+    if (data.savedCity && data.savedLat != null) {
+      fetchWeatherByCoords(data.savedLat, data.savedLon, data.savedCity, data.savedCountry);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function fetchWeather(cityName) {
+  // ── Geocode → coords → weather ────────────────────────────────────────
+  async function searchCity(e) {
+    e?.preventDefault();
+    const q = cityInput.trim();
+    if (!q) return;
     setLoading(true);
     setError("");
     try {
-      // 1. Geocode
-      const geoRes  = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=en&format=json`);
-      const geoData = await geoRes.json();
-      if (!geoData.results?.length) throw new Error("City not found");
-      const { latitude, longitude, name, country } = geoData.results[0];
+      // Nominatim geocoding — completely free, no key, CORS-open
+      const geoResp = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,
+        { headers: { "Accept-Language": "en" } }
+      );
+      const geoData = await geoResp.json();
+      if (!geoData.length) throw new Error(`City "${q}" not found. Try a different name.`);
 
-      // 2. Weather
-      const wRes  = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weathercode,windspeed_10m,relativehumidity_2m&temperature_unit=celsius`);
-      const wData = await wRes.json();
-      const cur   = wData.current;
+      const { lat, lon, display_name } = geoData[0];
+      // Parse city and country from display_name (format: "City, Region, Country")
+      const parts   = display_name.split(",");
+      const city    = parts[0].trim();
+      const country = parts[parts.length - 1].trim();
 
-      setWeather({
-        tempC:    cur.temperature_2m,
-        code:     cur.weathercode,
-        wind:     cur.windspeed_10m,
-        humidity: cur.relativehumidity_2m,
-        city:     name,
-        country,
+      await fetchWeatherByCoords(parseFloat(lat), parseFloat(lon), city, country);
+
+      // Persist for next session
+      updateWidget(data.id, {
+        savedCity: city, savedCountry: country,
+        savedLat: parseFloat(lat), savedLon: parseFloat(lon),
+        unit,
       });
-      setCity(cityName);
-      updateWidget(data.id, { city: cityName, unit });
-      setEditCity(false);
+      setSearching(false);
     } catch (err) {
-      setError(err.message || "Failed to fetch");
+      setError(err.message || "Failed to geocode city.");
+      setLoading(false);
     }
-    setLoading(false);
   }
 
-  function handleSearch(e) {
-    e.preventDefault();
-    if (cityInput.trim()) fetchWeather(cityInput.trim());
+  async function fetchWeatherByCoords(lat, lon, city, country) {
+    setLoading(true);
+    setError("");
+    try {
+      // Open-Meteo — free, no key, CORS-open
+      const resp = await fetch(
+        `https://api.open-meteo.com/v1/forecast` +
+        `?latitude=${lat}&longitude=${lon}` +
+        `&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,relativehumidity_2m` +
+        `&temperature_unit=celsius&windspeed_unit=kmh&timezone=auto`
+      );
+      if (!resp.ok) throw new Error(`Weather API error: ${resp.status}`);
+      const json = await resp.json();
+      const cur  = json.current;
+
+      setWeather({
+        city, country,
+        tempC:      cur.temperature_2m,
+        feelsLikeC: cur.apparent_temperature,
+        code:       cur.weathercode,
+        wind:       Math.round(cur.windspeed_10m),
+        humidity:   cur.relativehumidity_2m,
+      });
+    } catch (err) {
+      setError(err.message || "Could not fetch weather.");
+    }
+    setLoading(false);
   }
 
   function toggleUnit() {
@@ -82,106 +131,109 @@ export default function WeatherWidget({ data, updateWidget, deleteWidget, isSele
     updateWidget(data.id, { unit: next });
   }
 
-  function displayTemp(c) {
+  function temp(c) {
     if (unit === "F") return `${Math.round(c * 9 / 5 + 32)}°F`;
     return `${Math.round(c)}°C`;
   }
 
-  const cond = weather ? getCondition(weather.code) : null;
+  const [desc, icon] = weather ? getWMO(weather.code) : ["", ""];
 
   return (
     <WidgetShell
       data={data} updateWidget={updateWidget} deleteWidget={deleteWidget}
-      label="Weather" minWidth={200} minHeight={180}
+      label="Weather" minWidth={220} minHeight={190}
       isSelected={isSelected} onSelect={onSelect}
       selectedIds={selectedIds} allWidgets={allWidgets} updateAllWidgets={updateAllWidgets}
     >
-      <div onMouseDown={(e) => e.stopPropagation()} style={{
-        flex: 1, display: "flex", flexDirection: "column",
-        padding: "14px", gap: "10px", fontFamily: "'DM Sans', sans-serif",
-      }}>
-        {/* City search */}
-        {editCity ? (
-          <form onSubmit={handleSearch} style={{ display: "flex", gap: "6px" }}>
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{ flex: 1, display: "flex", flexDirection: "column", padding: "14px", gap: "10px" }}
+      >
+        {/* ── City search ── */}
+        {searching ? (
+          <form onSubmit={searchCity} style={{ display: "flex", gap: "6px" }}>
             <input
               autoFocus
               value={cityInput}
               onChange={(e) => setCityInput(e.target.value)}
-              placeholder="Enter city..."
+              placeholder="Enter city name…"
               style={{
                 flex: 1, background: "#ffffff0d",
                 border: `1px solid ${color.border}`, borderRadius: "8px",
-                padding: "6px 10px", color: "#ddd", fontSize: "12px",
+                padding: "7px 10px", color: "#ddd", fontSize: "12px",
                 outline: "none", fontFamily: "inherit", caretColor: color.accent,
               }}
-              onFocus={(e) => e.currentTarget.style.borderColor = color.accent + "88"}
+              onFocus={(e) => e.currentTarget.style.borderColor = color.accent + "99"}
               onBlur={(e)  => e.currentTarget.style.borderColor = color.border}
             />
             <button type="submit" style={{
               background: color.accent, border: "none", borderRadius: "8px",
-              color: "#fff", padding: "6px 12px", fontSize: "12px",
-              fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+              color: "#fff", padding: "7px 14px", fontSize: "12px",
+              fontWeight: 700, cursor: "pointer", flexShrink: 0,
             }}>Go</button>
           </form>
         ) : (
+          /* City header row */
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "12px", color: "#888", fontWeight: 500 }}>
+            <span style={{ fontSize: "12px", color: "#888", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {weather?.city}, {weather?.country}
             </span>
-            <div style={{ display: "flex", gap: "4px" }}>
-              <button onClick={toggleUnit} style={{
-                background: "transparent", border: `1px solid ${color.border}`,
-                borderRadius: "5px", color: "#666", fontSize: "10px",
-                padding: "2px 6px", cursor: "pointer", fontFamily: "inherit",
-              }}>°{unit === "C" ? "F" : "C"}</button>
-              <button onClick={() => setEditCity(true)} style={{
-                background: "transparent", border: "none",
-                color: "#444", fontSize: "12px", cursor: "pointer",
-              }}>✎</button>
+            <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
+              <button onClick={toggleUnit} style={smBtn}>°{unit === "C" ? "F" : "C"}</button>
+              <button onClick={() => setSearching(true)} style={smBtn} title="Change city">✎</button>
             </div>
           </div>
         )}
 
-        {/* Loading / error */}
-        {loading && <div style={{ fontSize: "12px", color: "#555", textAlign: "center" }}>Fetching…</div>}
-        {error   && <div style={{ fontSize: "11px", color: "#f43f5e", textAlign: "center" }}>{error}</div>}
+        {/* ── Status ── */}
+        {loading && <p style={{ fontSize: "12px", color: "#555", textAlign: "center", margin: 0 }}>Fetching weather…</p>}
+        {error   && (
+          <div style={{ fontSize: "11px", color: "#f43f5e", background: "#f43f5e11", borderRadius: "6px", padding: "8px 10px" }}>
+            ⚠ {error}
+          </div>
+        )}
 
-        {/* Weather display */}
+        {/* ── Weather display ── */}
         {weather && !loading && (
           <>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <span style={{ fontSize: "44px", lineHeight: 1 }}>{cond.icon}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+              <span style={{ fontSize: "48px", lineHeight: 1, flexShrink: 0 }}>{icon}</span>
               <div>
-                <div style={{ fontSize: "32px", fontWeight: 700, color: color.accent, lineHeight: 1 }}>
-                  {displayTemp(weather.tempC)}
+                <div style={{ fontSize: "34px", fontWeight: 800, color: color.accent, lineHeight: 1 }}>
+                  {temp(weather.tempC)}
                 </div>
-                <div style={{ fontSize: "11px", color: "#666", marginTop: "2px" }}>
-                  {cond.label}
+                <div style={{ fontSize: "11px", color: "#666", marginTop: "3px" }}>
+                  Feels like {temp(weather.feelsLikeC)} · {desc}
                 </div>
               </div>
             </div>
-            <div style={{ display: "flex", gap: "12px" }}>
-              <Stat label="Wind"     value={`${weather.wind} km/h`} color={color} />
-              <Stat label="Humidity" value={`${weather.humidity}%`}  color={color} />
+
+            <div style={{ display: "flex", gap: "8px" }}>
+              <StatBox label="Wind"     value={`${weather.wind} km/h`} color={color} />
+              <StatBox label="Humidity" value={`${weather.humidity}%`}  color={color} />
             </div>
           </>
-        )}
-
-        {!weather && !loading && !editCity && (
-          <div style={{ fontSize: "11px", color: "#333", textAlign: "center", marginTop: "8px" }}>
-            No data — search for a city
-          </div>
         )}
       </div>
     </WidgetShell>
   );
 }
 
-function Stat({ label, value, color }) {
+function StatBox({ label, value, color }) {
   return (
-    <div style={{ flex: 1, background: "#ffffff06", border: `1px solid ${color.border}`, borderRadius: "8px", padding: "6px 8px" }}>
-      <div style={{ fontSize: "9px", color: "#555", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: "2px" }}>{label}</div>
-      <div style={{ fontSize: "13px", color: "#aaa", fontWeight: 600 }}>{value}</div>
+    <div style={{
+      flex: 1, background: "#ffffff07",
+      border: `1px solid ${color.border}`,
+      borderRadius: "8px", padding: "6px 8px",
+    }}>
+      <div style={{ fontSize: "9px", color: "#555", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: "2px" }}>{label}</div>
+      <div style={{ fontSize: "13px", color: "#bbb", fontWeight: 600 }}>{value}</div>
     </div>
   );
 }
+
+const smBtn = {
+  background: "transparent", border: "1px solid #2a2a2a",
+  borderRadius: "5px", color: "#555", fontSize: "10px",
+  padding: "2px 7px", cursor: "pointer", fontFamily: "inherit",
+};

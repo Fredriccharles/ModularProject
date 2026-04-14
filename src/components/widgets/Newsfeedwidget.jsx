@@ -1,821 +1,209 @@
-import { useEffect, useRef, useState } from "react";
-import NotesWidget    from "./components/widgets/NotesWidget";
-import TodoWidget     from "./components/widgets/TodoWidget";
-import ClockWidget    from "./components/widgets/ClockWidget";
-import PomodoroWidget from "./components/widgets/PomodoroWidget";
-import CalendarWidget from "./components/widgets/CalendarWidget.jsx";
-import { WIDGET_COLORS } from "./components/widgets/widgetColors.jsx";
-import KanbanWidget from "./components/widgets/KanbanWidget.jsx";
-import WhiteboardWidget from "./components/widgets/Whiteboardwidget.jsx";
-import PdfWidget from "./components/widgets/Pdfwidget.jsx";
-import IdeaGeneratorWidget from "./components/widgets/IdeaGeneratorWidget.jsx";
-import WeatherWidget      from "./components/widgets/WeatherWidget.jsx";
-import NewsFeedWidget     from "./components/widgets/NewsFeedWidget.jsx";
-import VisionBoardWidget  from "./components/widgets/VisionBoardWidget.jsx";
-import MiniMap from "./components/MiniMap.jsx";
-import { supabase } from "./supabaseClient";
+// NewsFeedWidget.jsx
+// Uses GNews.io — free tier: 100 req/day, no CORS issues, no server needed.
+// Get a free API key at https://gnews.io (takes 30 seconds).
+// Until you add a key, it falls back to showing setup instructions.
 
-let colorIndex = 0;
-const GRID_SIZE = 24;
+import { useEffect, useState } from "react";
+import { WidgetShell } from "./Widgetshell.jsx";
+import { getColor } from "./widgetColors.jsx";
 
-const WIDGET_CATALOGUE = [
-  { type: "notes",    icon: "✏️", label: "Note",     w: 280, h: 220 },
-  { type: "todo",     icon: "✓",  label: "Todo",     w: 280, h: 220 },
-  { type: "clock",    icon: "◷",  label: "Clock",    w: 260, h: 120 },
-  { type: "pomodoro", icon: "⏱",  label: "Pomodoro", w: 240, h: 260 },
-  { type: "calendar", icon: "📅", label: "Calendar", w: 680, h: 480 },
-  { type: "kanban",     icon: "🗂",  label: "Kanban",  w: 560, h: 380 },
-  { type: "whiteboard", icon: "🧩",  label: "Draw",    w: 500, h: 400 },
-  { type: "pdf",        icon: "📄",  label: "PDF",     w: 520, h: 520 },
-  { type: "idea",        icon: "✦",   label: "Ideas",    w: 300, h: 340 },
-  { type: "weather",     icon: "🌤",  label: "Weather",   w: 240, h: 200 },
-  { type: "news",        icon: "📰",  label: "News",      w: 320, h: 400 },
-  { type: "visionboard", icon: "🖼",  label: "Vision",    w: 600, h: 460 },
+// ── Configuration ─────────────────────────────────────────────────────────────
+// Replace with your free GNews key from https://gnews.io
+// Free tier: 100 requests/day, no credit card needed.
+const GNEWS_KEY = ""; // ← paste your key here
+
+const TOPICS = [
+  { label: "Top",        value: "breaking-news" },
+  { label: "World",      value: "world"         },
+  { label: "Tech",       value: "technology"    },
+  { label: "Science",    value: "science"       },
+  { label: "Health",     value: "health"        },
+  { label: "Business",   value: "business"      },
 ];
 
-const THEMES = {
-  dark: {
-    bg: "#0f0f0f", panel: "#161616", sidebar: "#141414",
-    border: "#242424", borderSub: "#2a2a2a",
-    text: "#e0e0e0", textDim: "#666", textMuted: "#444",
-    dot: "#2a2a2a", inputBg: "#1e1e1e", hoverBg: "#1e1e1e",
-    toolbarBg: "#181818",
-  },
-  light: {
-    bg: "#f0f0f0", panel: "#ffffff", sidebar: "#fafafa",
-    border: "#e0e0e0", borderSub: "#dddddd",
-    text: "#111111", textDim: "#555", textMuted: "#999",
-    dot: "#cccccc", inputBg: "#f5f5f5", hoverBg: "#f0f0f0",
-    toolbarBg: "#ffffff",
-  },
-};
+export default function NewsFeedWidget({
+  data, updateWidget, deleteWidget,
+  isSelected, onSelect, selectedIds, allWidgets, updateAllWidgets,
+}) {
+  const color = getColor(data.colorId);
 
-function snap(value, enabled) {
-  return enabled ? Math.round(value / GRID_SIZE) * GRID_SIZE : value;
-}
+  const [topicIdx,  setTopicIdx]  = useState(data.topicIdx ?? 0);
+  const [articles,  setArticles]  = useState([]);
+  const [loading,   setLoading]   = useState(false);
+  const [error,     setError]     = useState("");
+  const [apiKey,    setApiKey]    = useState(data.gnewsKey || GNEWS_KEY);
+  const [keyInput,  setKeyInput]  = useState(data.gnewsKey || GNEWS_KEY);
+  const [showSetup, setShowSetup] = useState(!data.gnewsKey && !GNEWS_KEY);
 
-// ── App receives user + onLogout from main.jsx ────────────────────────────
-function App({ user, onLogout }) {
-  // ── Widget + canvas state ─────────────────────────────────────────────
-  const [widgets,      setWidgets]      = useState([]);
-  const [offset,       setOffset]       = useState({ x: 0, y: 0 });
-  const [zoom,         setZoom]         = useState(1);
-  const [selectedIds,  setSelectedIds]  = useState([]);
-  const [selectionBox, setSelectionBox] = useState(null);
-
-  // ── UI state ──────────────────────────────────────────────────────────
-  const [sidebarOpen,  setSidebarOpen]  = useState(true);
-  const [activeTool,   setActiveTool]   = useState("hand");
-  const [draggingType, setDraggingType] = useState(null);
-  const [theme,        setTheme]        = useState("dark");
-  const [snapEnabled,  setSnapEnabled]  = useState(false);
-  const [bgImage,      setBgImage]      = useState(null);
-  const [saving,       setSaving]       = useState(false);
-  const [loaded,       setLoaded]       = useState(false);
-
-  const T = THEMES[theme];
-
-  // ── Refs ──────────────────────────────────────────────────────────────
-  const offsetRef       = useRef({ x: 0, y: 0 });
-  const zoomRef         = useRef(1);
-  const widgetsRef      = useRef(widgets);
-  const selectedIdsRef  = useRef(selectedIds);
-  const activeToolRef   = useRef("hand");
-  const draggingTypeRef = useRef(null);
-  const snapEnabledRef  = useRef(false);
-  const sidebarOpenRef  = useRef(true);
-  const isPanning       = useRef(false);
-  const panLast         = useRef({ x: 0, y: 0 });
-  const isSelecting     = useRef(false);
-  const selStart        = useRef({ x: 0, y: 0 });
-  const selectionBoxRef = useRef(null);
-  const dragGhostRef    = useRef(null);
-  const bgInputRef      = useRef(null);
-  const saveTimeout     = useRef(null);
-
-  useEffect(() => { offsetRef.current      = offset; },      [offset]);
-  useEffect(() => { zoomRef.current        = zoom; },        [zoom]);
-  useEffect(() => { widgetsRef.current     = widgets; },     [widgets]);
-  useEffect(() => { selectedIdsRef.current = selectedIds; }, [selectedIds]);
-  useEffect(() => { activeToolRef.current  = activeTool; },  [activeTool]);
-  useEffect(() => { selectionBoxRef.current = selectionBox; }, [selectionBox]);
-  useEffect(() => { snapEnabledRef.current  = snapEnabled; }, [snapEnabled]);
-  useEffect(() => { sidebarOpenRef.current  = sidebarOpen; }, [sidebarOpen]);
-
-  // ── Load workspace from Supabase on mount ─────────────────────────────
+  // Auto-fetch when topic changes or key becomes available
   useEffect(() => {
-    setLoaded(false);
-    async function loadWorkspace() {
-      const { data, error } = await supabase
-        .from("workspaces")
-        .select("*")
-        .eq("user_id", user.id)
-        .single();
-      if (data && !error) {
-        setWidgets(data.widgets   || []);
-        setOffset({ x: data.offset_x ?? 0, y: data.offset_y ?? 0 });
-        setZoom(data.zoom ?? 1);
-      }
-      setLoaded(true); // ← triggers save effect to re-run
-    }
-    loadWorkspace();
-  }, [user.id]);
-
-  // ── Auto-save to Supabase (debounced 1.5s) ───────────────────────────
-  // loaded is in deps so this re-runs when load completes → saves immediately after load
-  useEffect(() => {
-    if (!loaded) return;
-    clearTimeout(saveTimeout.current);
-    saveTimeout.current = setTimeout(async () => {
-      setSaving(true);
-      await supabase.from("workspaces").upsert({
-        user_id:  user.id,
-        widgets,
-        offset_x: offset.x,
-        offset_y: offset.y,
-        zoom,
-      }, { onConflict: "user_id" });
-      setSaving(false);
-    }, 1500);
-  }, [loaded, widgets, offset, zoom]);
-
-  // ── CRUD ──────────────────────────────────────────────────────────────
-  function addWidget(type, screenX, screenY) {
-    const colorId   = WIDGET_COLORS[colorIndex % WIDGET_COLORS.length].id;
-    colorIndex++;
-    const o         = offsetRef.current;
-    const z         = zoomRef.current;
-    const cat       = WIDGET_CATALOGUE.find((c) => c.type === type);
-    const W         = cat?.w ?? 280;
-    const H         = cat?.h ?? 220;
-    const SIDEBAR_W = sidebarOpenRef.current ? 220 : 0;
-
-    let worldX, worldY;
-    if (screenX != null) {
-      worldX = (screenX - SIDEBAR_W - o.x) / z - W / 2;
-      worldY = (screenY - 48 - o.y) / z - H / 2;
-    } else {
-      worldX = (-o.x + (window.innerWidth - SIDEBAR_W) / 2 - W / 2) / z;
-      worldY = (-o.y + (window.innerHeight - 48) / 2 - H / 2) / z;
-    }
-
-    worldX = snap(worldX, snapEnabledRef.current);
-    worldY = snap(worldY, snapEnabledRef.current);
-
-    setWidgets((prev) => [...prev, {
-      id: Date.now(), type, colorId,
-      x: worldX, y: worldY, width: W, height: H,
-    }]);
-  }
-
-  function updateWidget(id, changes) {
-    if (changes.x != null) changes.x = snap(changes.x, snapEnabledRef.current);
-    if (changes.y != null) changes.y = snap(changes.y, snapEnabledRef.current);
-    setWidgets((prev) => prev.map((w) => w.id === id ? { ...w, ...changes } : w));
-  }
-
-  function updateAllWidgets(updates) {
-    setWidgets((prev) => {
-      const map = {};
-      updates.forEach(({ id, changes }) => {
-        if (changes.x != null) changes.x = snap(changes.x, snapEnabledRef.current);
-        if (changes.y != null) changes.y = snap(changes.y, snapEnabledRef.current);
-        map[id] = changes;
-      });
-      return prev.map((w) => map[w.id] ? { ...w, ...map[w.id] } : w);
-    });
-  }
-
-  function deleteWidget(id) {
-    setWidgets((prev) => prev.filter((w) => w.id !== id));
-    setSelectedIds((prev) => prev.filter((s) => s !== id));
-  }
-
-  // ── Selection ─────────────────────────────────────────────────────────
-  function handleWidgetSelect(id, e) {
-    if (e.shiftKey) {
-      setSelectedIds((prev) =>
-        prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
-      );
-    } else {
-      setSelectedIds([id]);
-    }
-  }
-
-  // ── Keyboard ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    function handleKey(e) {
-      const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if (e.key === "Delete" || e.key === "Backspace") {
-        const ids = selectedIdsRef.current;
-        if (!ids.length) return;
-        setWidgets((prev) => prev.filter((w) => !ids.includes(w.id)));
-        setSelectedIds([]);
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "d") {
-        e.preventDefault();
-        const ids = selectedIdsRef.current;
-        if (!ids.length) return;
-        setWidgets((prev) => {
-          const dupes = prev
-            .filter((w) => ids.includes(w.id))
-            .map((w) => ({ ...w, id: Date.now() + Math.random(), x: w.x + 24, y: w.y + 24 }));
-          return [...prev, ...dupes];
-        });
-      }
-      if (e.key === "Escape") setSelectedIds([]);
-      if (e.key === "h") setActiveTool("hand");
-      if (e.key === "v" || e.key === "s") setActiveTool("select");
-    }
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, []);
-
-  // ── Ghost drag ────────────────────────────────────────────────────────
-  function startGhost(type, e) {
-    e.preventDefault();
-    setDraggingType(type);
-    draggingTypeRef.current = type;
-    const cat   = WIDGET_CATALOGUE.find((c) => c.type === type);
-    const ghost = document.createElement("div");
-    ghost.style.cssText = `
-      position:fixed; pointer-events:none; z-index:99999;
-      width:130px; padding:10px 14px;
-      background:${theme === "dark" ? "#1e1e1e" : "#fff"};
-      border:1px solid ${theme === "dark" ? "#555" : "#ddd"};
-      border-radius:10px;
-      color:${theme === "dark" ? "#ccc" : "#333"};
-      font-size:13px; font-family:'DM Sans',sans-serif;
-      opacity:0.9; display:flex; align-items:center; gap:8px;
-      box-shadow:0 8px 32px rgba(0,0,0,0.4);
-      transform:translate(-50%,-50%);
-      left:${e.clientX}px; top:${e.clientY}px;
-    `;
-    ghost.innerHTML = `<span style="font-size:18px">${cat?.icon ?? "□"}</span><span>${cat?.label ?? type}</span>`;
-    document.body.appendChild(ghost);
-    dragGhostRef.current = ghost;
-  }
-
-  function moveGhost(e) {
-    if (!dragGhostRef.current) return;
-    dragGhostRef.current.style.left = `${e.clientX}px`;
-    dragGhostRef.current.style.top  = `${e.clientY}px`;
-  }
-
-  function dropGhost(e) {
-    const type = draggingTypeRef.current;
-    if (!type) return;
-    const SIDEBAR_W = sidebarOpenRef.current ? 220 : 0;
-    if (e.clientY > 48 && e.clientX > SIDEBAR_W) {
-      addWidget(type, e.clientX, e.clientY);
-    }
-    if (dragGhostRef.current) {
-      document.body.removeChild(dragGhostRef.current);
-      dragGhostRef.current = null;
-    }
-    draggingTypeRef.current = null;
-    setDraggingType(null);
-  }
-
-  // ── Global mouse listeners ────────────────────────────────────────────
-  useEffect(() => {
-    function onMouseMove(e) {
-      moveGhost(e);
-      if (isPanning.current) {
-        const dx = e.clientX - panLast.current.x;
-        const dy = e.clientY - panLast.current.y;
-        panLast.current = { x: e.clientX, y: e.clientY };
-        setOffset((prev) => {
-          const next = { x: prev.x + dx, y: prev.y + dy };
-          offsetRef.current = next;
-          return next;
-        });
-      }
-      if (isSelecting.current) {
-        const sx = selStart.current.x;
-        const sy = selStart.current.y;
-        setSelectionBox({
-          x: Math.min(e.clientX, sx),
-          y: Math.min(e.clientY, sy),
-          w: Math.abs(e.clientX - sx),
-          h: Math.abs(e.clientY - sy),
-        });
-      }
-    }
-
-    function onMouseUp(e) {
-      dropGhost(e);
-      if (isSelecting.current) {
-        const box = selectionBoxRef.current;
-        if (box && (box.w > 8 || box.h > 8)) {
-          const o  = offsetRef.current;
-          const z  = zoomRef.current;
-          const SB = sidebarOpenRef.current ? 220 : 0;
-          const bx1 = (box.x - SB - o.x) / z;
-          const by1 = (box.y - 48 - o.y) / z;
-          const bx2 = bx1 + box.w / z;
-          const by2 = by1 + box.h / z;
-          const hit = widgetsRef.current
-            .filter((w) => {
-              const ww = parseFloat(w.width)  || 280;
-              const wh = parseFloat(w.height) || 220;
-              return w.x < bx2 && w.x + ww > bx1 && w.y < by2 && w.y + wh > by1;
-            })
-            .map((w) => w.id);
-          setSelectedIds((prev) => e.shiftKey ? [...new Set([...prev, ...hit])] : hit);
-        }
-        setSelectionBox(null);
-      }
-      isPanning.current   = false;
-      isSelecting.current = false;
-    }
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup",   onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup",   onMouseUp);
-    };
+    if (apiKey) fetchNews(topicIdx, apiKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme]);
+  }, [topicIdx, apiKey]);
 
-  // ── Canvas mousedown ──────────────────────────────────────────────────
-  function onCanvasMouseDown(e) {
-    if (e.target.closest(".rnd-widget"))   return;
-    if (e.target.closest("[data-no-pan]")) return;
-    if (e.button !== 0)                    return;
-    if (!e.shiftKey) setSelectedIds([]);
-    if (activeToolRef.current === "hand") {
-      panLast.current   = { x: e.clientX, y: e.clientY };
-      isPanning.current = true;
-    } else {
-      selStart.current    = { x: e.clientX, y: e.clientY };
-      isSelecting.current = true;
-      setSelectionBox({ x: e.clientX, y: e.clientY, w: 0, h: 0 });
+  async function fetchNews(idx, key) {
+    setLoading(true);
+    setError("");
+    setArticles([]);
+    const topic = TOPICS[idx].value;
+    try {
+      const resp = await fetch(
+        `https://gnews.io/api/v4/top-headlines?topic=${topic}&lang=en&max=20&apikey=${key}`
+      );
+      if (!resp.ok) {
+        const j = await resp.json().catch(() => ({}));
+        throw new Error(j?.errors?.[0] || `HTTP ${resp.status}`);
+      }
+      const json = await resp.json();
+      if (!json.articles?.length) throw new Error("No articles returned.");
+      setArticles(json.articles);
+    } catch (err) {
+      setError(err.message);
     }
+    setLoading(false);
   }
 
-  // ── Zoom ──────────────────────────────────────────────────────────────
-  // Ctrl+Wheel OR Ctrl+Shift+Wheel both zoom, centered on cursor
-  function onWheel(e) {
-    if (!e.ctrlKey) return;
-    e.preventDefault();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const cx   = e.clientX - rect.left;
-    const cy   = e.clientY - rect.top;
-    const o    = offsetRef.current;
-    const z    = zoomRef.current;
-    // Shift makes it faster (3x), plain ctrl is fine-grained
-    const sensitivity = e.shiftKey ? 0.004 : 0.0012;
-    const newZoom = Math.min(Math.max(z - e.deltaY * sensitivity, 0.1), 5);
-    const wx = (cx - o.x) / z;
-    const wy = (cy - o.y) / z;
-    const newOff = { x: cx - wx * newZoom, y: cy - wy * newZoom };
-    offsetRef.current = newOff;
-    zoomRef.current   = newZoom;
-    setOffset(newOff);
-    setZoom(newZoom);
+  function saveKey(e) {
+    e?.preventDefault();
+    const k = keyInput.trim();
+    if (!k) return;
+    setApiKey(k);
+    updateWidget(data.id, { gnewsKey: k });
+    setShowSetup(false);
   }
 
-  function zoomBy(delta) {
-    const cx = window.innerWidth / 2;
-    const cy = (window.innerHeight - 48) / 2;
-    const o  = offsetRef.current;
-    const z  = zoomRef.current;
-    const nz = Math.min(Math.max(z + delta, 0.1), 5);
-    const no = { x: cx - ((cx - o.x) / z) * nz, y: cy - ((cy - o.y) / z) * nz };
-    offsetRef.current = no;
-    zoomRef.current   = nz;
-    setOffset(no);
-    setZoom(nz);
+  function switchTopic(idx) {
+    setTopicIdx(idx);
+    updateWidget(data.id, { topicIdx: idx });
   }
 
-  function zoomReset() {
-    offsetRef.current = { x: 0, y: 0 };
-    zoomRef.current   = 1;
-    setOffset({ x: 0, y: 0 });
-    setZoom(1);
+  function timeSince(iso) {
+    if (!iso) return "";
+    const diff = Date.now() - new Date(iso).getTime();
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor(diff / 60000);
+    if (h > 23) return `${Math.floor(h / 24)}d ago`;
+    if (h > 0)  return `${h}h ago`;
+    return `${Math.max(1, m)}m ago`;
   }
 
-  function handleBgUpload(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setBgImage(ev.target.result);
-    reader.readAsDataURL(file);
-    e.target.value = "";
-  }
-
-  const sharedProps = (w) => ({
-    key: w.id, data: w, updateWidget, deleteWidget,
-    isSelected: selectedIds.includes(w.id),
-    onSelect: handleWidgetSelect,
-    selectedIds, allWidgets: widgets, updateAllWidgets,
-  });
-
-  const canvasCursor = activeTool === "hand"
-    ? (isPanning.current ? "grabbing" : "grab")
-    : "default";
-
-  // ── Render ────────────────────────────────────────────────────────────
   return (
-    <div style={{
-      width: "100vw", height: "100vh",
-      display: "flex", flexDirection: "column",
-      fontFamily: "'DM Sans', sans-serif",
-      background: T.bg, overflow: "hidden",
-      transition: "background 0.25s",
-    }}>
-
-      {/* ── Topbar ── */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "0 16px", height: "48px",
-        background: T.panel, borderBottom: `1px solid ${T.border}`,
-        flexShrink: 0, position: "relative", zIndex: 200,
-        transition: "background 0.25s, border-color 0.25s",
-      }}>
-        {/* Left: sidebar toggle + logo */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <button
-            onClick={() => setSidebarOpen((v) => !v)}
-            data-no-pan="true"
-            style={{
-              background: sidebarOpen ? T.hoverBg : "transparent",
-              border: `1px solid ${sidebarOpen ? T.borderSub : "transparent"}`,
-              color: sidebarOpen ? T.text : T.textDim,
-              padding: "5px 9px", borderRadius: "6px",
-              cursor: "pointer", fontSize: "14px", transition: "all 0.15s",
-            }}
-          >☰</button>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <div style={{ width: "22px", height: "22px", background: "linear-gradient(135deg, #8b5cf6, #6366f1)", borderRadius: "6px" }} />
-            <span style={{ fontSize: "13px", fontWeight: 600, color: T.text, letterSpacing: "-0.01em" }}>
-              Workspace
-            </span>
-          </div>
-        </div>
-
-        {/* Right: save indicator only — zoom moved to bottom-right overlay */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span style={{ fontSize: "11px", color: saving ? "#8b5cf6" : T.textMuted, transition: "color 0.3s" }}>
-            {saving ? "Saving…" : "Saved ✓"}
-          </span>
-        </div>
-      </div>
-
-      {/* ── Body ── */}
-      <div style={{ flex: 1, display: "flex", position: "relative", overflow: "hidden" }}>
-
-        {/* ── Sidebar ── */}
-        <div style={{
-          width: sidebarOpen ? "220px" : "0px",
-          flexShrink: 0, overflow: "hidden",
-          background: T.sidebar, borderRight: sidebarOpen ? `1px solid ${T.border}` : "none",
-          transition: "width 0.22s ease, background 0.25s",
-          display: "flex", flexDirection: "column", zIndex: 100,
-        }}>
-          {/* Header */}
-          <div style={{ padding: "14px 12px 10px", flexShrink: 0 }}>
-            <p style={{ fontSize: "10px", color: T.textMuted, letterSpacing: "0.1em", textTransform: "uppercase", margin: 0 }}>
-              Widgets
-            </p>
-          </div>
-
-          {/* Tile grid */}
-          <div style={{
-            flex: 1, overflowY: "auto", padding: "0 10px 12px",
-            display: "grid", gridTemplateColumns: "1fr 1fr",
-            gap: "8px", alignContent: "start",
-          }}>
-            {WIDGET_CATALOGUE.map((cat) => (
-              <SidebarTile
-                key={cat.type}
-                icon={cat.icon} label={cat.label} T={T}
-                onMouseDown={(e) => startGhost(cat.type, e)}
-              />
-            ))}
-          </div>
-
-          {/* ✅ ADDED — Sidebar footer: user email + logout */}
-          <div style={{
-            padding: "12px",
-            borderTop: `1px solid ${T.border}`,
-            flexShrink: 0,
-            display: "flex", flexDirection: "column", gap: "8px",
-          }}>
-            {/* User info */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <div style={{
-                width: "28px", height: "28px", borderRadius: "50%",
-                background: "linear-gradient(135deg, #8b5cf6, #6366f1)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: "12px", color: "#fff", fontWeight: 700,
-                flexShrink: 0,
-              }}>
-                {user.email?.[0]?.toUpperCase() ?? "U"}
-              </div>
-              <div style={{ overflow: "hidden" }}>
-                <p style={{ margin: 0, fontSize: "11px", color: T.text, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {user.email}
-                </p>
-                <p style={{ margin: 0, fontSize: "10px", color: T.textMuted }}>
-                  Free plan
-                </p>
-              </div>
-            </div>
-
-            {/* Logout button */}
-            <button
-              onClick={onLogout}
-              style={{
-                width: "100%", padding: "8px",
-                background: "transparent",
-                border: `1px solid ${T.border}`,
-                borderRadius: "8px",
-                color: T.textDim, fontSize: "12px",
-                cursor: "pointer", fontFamily: "inherit",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                gap: "6px", transition: "all 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background   = "#f43f5e18";
-                e.currentTarget.style.borderColor  = "#f43f5e44";
-                e.currentTarget.style.color        = "#f43f5e";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background   = "transparent";
-                e.currentTarget.style.borderColor  = T.border;
-                e.currentTarget.style.color        = T.textDim;
-              }}
-            >
-              <span style={{ fontSize: "13px" }}>→</span>
-              Log out
-            </button>
-          </div>
-        </div>
-
-        {/* ── Canvas ── */}
-        <div
-          onMouseDown={onCanvasMouseDown}
-          onWheel={onWheel}
-          style={{
-            flex: 1, position: "relative", overflow: "hidden",
-            background: T.bg, cursor: canvasCursor,
-            userSelect: "none", transition: "background 0.25s",
-          }}
-        >
-          {/* BG image layer */}
-          {bgImage && (
-            <div style={{
-              position: "absolute", inset: 0,
-              backgroundImage: `url(${bgImage})`,
-              backgroundSize: "cover", backgroundPosition: "center",
-              opacity: 0.15, pointerEvents: "none", zIndex: 0,
-            }} />
-          )}
-
-          {/* Dot grid */}
-          <div style={{
-            position: "absolute", inset: 0,
-            backgroundImage: `radial-gradient(circle, ${T.dot} 1px, transparent 1px)`,
-            backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
-            backgroundPosition: `${offset.x % (24 * zoom)}px ${offset.y % (24 * zoom)}px`,
-            pointerEvents: "none", zIndex: 1,
-          }} />
-
-          {/* World layer */}
-          <div style={{
-            position: "absolute", top: 0, left: 0,
-            transformOrigin: "0 0",
-            transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
-            overflow: "visible", zIndex: 2,
-          }}>
-            {widgets.map((w) => {
-              const p = sharedProps(w);
-              if (w.type === "notes")    return <NotesWidget    {...p} />;
-              if (w.type === "todo")     return <TodoWidget     {...p} />;
-              if (w.type === "clock")    return <ClockWidget    {...p} />;
-              if (w.type === "pomodoro") return <PomodoroWidget {...p} />;
-              if (w.type === "calendar") return <CalendarWidget {...p} />;
-              if (w.type === "kanban")     return <KanbanWidget        {...p} />;
-              if (w.type === "whiteboard") return <WhiteboardWidget    {...p} />;
-              if (w.type === "pdf")        return <PdfWidget           {...p} />;
-              if (w.type === "idea")        return <IdeaGeneratorWidget {...p} />;
-              if (w.type === "weather")     return <WeatherWidget       {...p} />;
-              if (w.type === "news")        return <NewsFeedWidget      {...p} />;
-              if (w.type === "visionboard") return <VisionBoardWidget   {...p} />;
-              return null;
-            })}
-          </div>
-
-          {/* Selection box */}
-          {selectionBox && selectionBox.w > 4 && (
-            <div style={{
-              position: "absolute",
-              left: selectionBox.x, top: selectionBox.y - 48,
-              width: selectionBox.w, height: selectionBox.h,
-              border: "1px dashed #8b5cf688",
-              background: "rgba(139,92,246,0.05)",
-              borderRadius: "4px", pointerEvents: "none", zIndex: 999,
-            }} />
-          )}
-
-          {/* Selection badge */}
-          {selectedIds.length > 1 && (
-            <div style={{
-              position: "absolute", bottom: "80px", left: "50%",
-              transform: "translateX(-50%)",
-              background: T.panel, border: `1px solid ${T.border}`,
-              borderRadius: "8px", padding: "6px 16px",
-              fontSize: "12px", color: T.textDim,
-              display: "flex", alignItems: "center", gap: "8px",
-              zIndex: 999, pointerEvents: "none",
-              boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
-            }}>
-              <span style={{ color: "#8b5cf6", fontWeight: 700 }}>{selectedIds.length}</span>
-              selected
-              <span style={{ color: T.textMuted }}>·</span>
-              <span style={{ color: T.textMuted, fontSize: "11px" }}>Del · Ctrl+D</span>
-            </div>
-          )}
-
-          {/* Loading spinner */}
-          {!loaded && (
-            <div style={{
-              position: "absolute", inset: 0, zIndex: 50,
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              gap: "12px", background: T.bg,
-            }}>
-              <div style={{
-                width: "32px", height: "32px", borderRadius: "50%",
-                border: `3px solid ${T.borderSub}`, borderTopColor: "#8b5cf6",
-                animation: "spin 0.7s linear infinite",
-              }} />
-              <p style={{ fontSize: "12px", color: T.textMuted, margin: 0 }}>Loading workspace…</p>
-              <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-            </div>
-          )}
-
-          {/* Empty state */}
-          {loaded && widgets.length === 0 && (
-            <div style={{
-              position: "absolute", inset: 0,
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              gap: "8px", pointerEvents: "none", zIndex: 3,
-            }}>
-              <span style={{ fontSize: "28px", opacity: 0.1 }}>✦</span>
-              <p style={{ fontSize: "11px", color: T.textMuted, letterSpacing: "0.12em", textTransform: "uppercase", margin: 0 }}>
-                {sidebarOpen ? "Drag a widget onto the canvas" : "Open the sidebar to add widgets"}
-              </p>
-            </div>
-          )}
-
-          {/* Floating toolbar */}
-          <div data-no-pan="true" style={{
-            position: "absolute", bottom: "20px", left: "50%",
-            transform: "translateX(-50%)",
-            display: "flex", alignItems: "center", gap: "2px",
-            background: T.toolbarBg, border: `1px solid ${T.border}`,
-            borderRadius: "14px", padding: "6px 8px",
-            zIndex: 1000, boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
-            userSelect: "none", transition: "background 0.25s, border-color 0.25s",
-          }}>
-            <ToolBtn icon="🖐️" label="Hand (H)"  active={activeTool === "hand"}   onClick={() => setActiveTool("hand")}   T={T} />
-            <ToolBtn icon="⬚"  label="Select (V)" active={activeTool === "select"} onClick={() => setActiveTool("select")} T={T} />
-            <Divider T={T} />
-            <ToolBtn
-              icon={theme === "dark" ? "☀️" : "🌙"}
-              label={theme === "dark" ? "Light mode" : "Dark mode"}
-              active={false}
-              onClick={() => setTheme((t) => t === "dark" ? "light" : "dark")}
-              T={T}
-            />
-            <ToolBtn icon="🧲" label={`Snap ${snapEnabled ? "ON" : "OFF"}`} active={snapEnabled} onClick={() => setSnapEnabled((v) => !v)} T={T} />
-            <Divider T={T} />
-            <ToolBtn icon="🖼️" label="Upload background" active={!!bgImage} onClick={() => bgInputRef.current?.click()} T={T} />
-            {bgImage && (
-              <ToolBtn icon="✕" label="Remove background" active={false} onClick={() => setBgImage(null)} T={T} />
-            )}
-            <input ref={bgInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleBgUpload} />
-          </div>
-
-          {/* ── Floating zoom controls — bottom-right ── */}
-          <div data-no-pan="true" style={{
-            position: "absolute", bottom: "20px", right: "20px",
-            display: "flex", alignItems: "center", gap: "6px",
-            background: T.toolbarBg,
-            border: `1px solid ${T.border}`,
-            borderRadius: "12px", padding: "6px 10px",
-            zIndex: 1000, boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
-            userSelect: "none",
-          }}>
-            <button data-no-pan="true" onClick={() => zoomBy(-0.2)} style={{
-              width: "32px", height: "32px", borderRadius: "8px",
-              border: "none", background: "transparent",
-              color: T.textDim, fontSize: "18px", fontWeight: 700,
-              cursor: "pointer", display: "flex", alignItems: "center",
-              justifyContent: "center", lineHeight: 1, transition: "all 0.12s",
-            }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = T.hoverBg; e.currentTarget.style.color = T.text; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.textDim; }}
-            >−</button>
-            <button data-no-pan="true" onClick={zoomReset} style={{
-              minWidth: "52px", height: "32px", borderRadius: "8px",
-              border: `1px solid ${T.borderSub}`, background: "transparent",
-              color: T.textDim, fontSize: "12px", fontWeight: 600,
-              cursor: "pointer", fontFamily: "inherit", transition: "all 0.12s",
-            }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = T.text; e.currentTarget.style.borderColor = T.textMuted; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = T.textDim; e.currentTarget.style.borderColor = T.borderSub; }}
-            >{Math.round(zoom * 100)}%</button>
-            <button data-no-pan="true" onClick={() => zoomBy(0.2)} style={{
-              width: "32px", height: "32px", borderRadius: "8px",
-              border: "none", background: "transparent",
-              color: T.textDim, fontSize: "18px", fontWeight: 700,
-              cursor: "pointer", display: "flex", alignItems: "center",
-              justifyContent: "center", lineHeight: 1, transition: "all 0.12s",
-            }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = T.hoverBg; e.currentTarget.style.color = T.text; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.textDim; }}
-            >+</button>
-          </div>
-
-          {/* MiniMap — top right corner of canvas */}
-          <MiniMap widgets={widgets} offset={offset} zoom={zoom} setOffset={(o) => { offsetRef.current = o; setOffset(o); }} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Sub-components ────────────────────────────────────────────────────────
-
-function SidebarTile({ icon, label, T, onMouseDown }) {
-  const [hov, setHov] = useState(false);
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center", gap: "6px",
-        padding: "14px 8px", borderRadius: "10px",
-        background: hov ? T.hoverBg : "transparent",
-        border: `1px solid ${hov ? T.borderSub : T.border}`,
-        cursor: "grab", color: hov ? T.text : T.textDim,
-        transition: "all 0.12s", userSelect: "none", minHeight: "72px",
-      }}
+    <WidgetShell
+      data={data} updateWidget={updateWidget} deleteWidget={deleteWidget}
+      label="News" minWidth={280} minHeight={320}
+      isSelected={isSelected} onSelect={onSelect}
+      selectedIds={selectedIds} allWidgets={allWidgets} updateAllWidgets={updateAllWidgets}
     >
-      <span style={{ fontSize: "22px", lineHeight: 1 }}>{icon}</span>
-      <span style={{ fontSize: "11px", fontWeight: 500, letterSpacing: "0.02em" }}>{label}</span>
-    </div>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+
+        {/* ── Setup screen — shown when no API key ── */}
+        {showSetup ? (
+          <div onMouseDown={(e) => e.stopPropagation()} style={{
+            flex: 1, display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            padding: "20px", gap: "12px", textAlign: "center",
+          }}>
+            <span style={{ fontSize: "28px" }}>📰</span>
+            <p style={{ fontSize: "13px", color: "#ccc", margin: 0, fontWeight: 600 }}>
+              Free API key needed
+            </p>
+            <p style={{ fontSize: "11px", color: "#555", margin: 0, lineHeight: 1.5 }}>
+              Get a free key at{" "}
+              <a href="https://gnews.io" target="_blank" rel="noopener noreferrer"
+                style={{ color: color.accent }}>gnews.io</a>
+              {" "}(30 sec, no card).
+            </p>
+            <form onSubmit={saveKey} style={{ display: "flex", gap: "6px", width: "100%" }}>
+              <input
+                autoFocus
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                placeholder="Paste API key…"
+                style={{
+                  flex: 1, background: "#1a1a1a",
+                  border: `1px solid ${color.border}`, borderRadius: "8px",
+                  padding: "7px 10px", color: "#ddd", fontSize: "11px",
+                  outline: "none", fontFamily: "inherit",
+                }}
+                onFocus={(e) => e.currentTarget.style.borderColor = color.accent + "99"}
+                onBlur={(e)  => e.currentTarget.style.borderColor = color.border}
+              />
+              <button type="submit" style={{
+                background: color.accent, border: "none", borderRadius: "8px",
+                color: "#fff", padding: "7px 12px", fontSize: "11px",
+                fontWeight: 700, cursor: "pointer", flexShrink: 0,
+              }}>Save</button>
+            </form>
+          </div>
+        ) : (
+          <>
+            {/* ── Topic tabs ── */}
+            <div onMouseDown={(e) => e.stopPropagation()} style={{
+              display: "flex", gap: "4px", padding: "8px 10px",
+              borderBottom: `1px solid ${color.border}`, flexShrink: 0,
+              overflowX: "auto", background: "#ffffff04",
+            }}>
+              {TOPICS.map((t, i) => (
+                <button key={i} onClick={() => switchTopic(i)} style={{
+                  padding: "3px 9px", borderRadius: "20px", flexShrink: 0,
+                  border: `1px solid ${topicIdx === i ? color.accent : color.border}`,
+                  background: topicIdx === i ? color.accent + "22" : "transparent",
+                  color: topicIdx === i ? color.accent : "#666",
+                  fontSize: "10px", cursor: "pointer", fontFamily: "inherit",
+                  fontWeight: topicIdx === i ? 700 : 400, transition: "all 0.12s",
+                }}>{t.label}</button>
+              ))}
+              <button onClick={() => setShowSetup(true)} title="Change API key" style={{
+                marginLeft: "auto", padding: "3px 6px", flexShrink: 0,
+                border: "none", background: "transparent",
+                color: "#333", fontSize: "11px", cursor: "pointer",
+              }}>⚙</button>
+            </div>
+
+            {/* ── Article list ── */}
+            <div onMouseDown={(e) => e.stopPropagation()} style={{ flex: 1, overflowY: "auto" }}>
+              {loading && (
+                <div style={{ padding: "24px", textAlign: "center", fontSize: "12px", color: "#444" }}>
+                  Loading…
+                </div>
+              )}
+              {error && (
+                <div style={{ padding: "14px", fontSize: "11px", color: "#f43f5e", background: "#f43f5e0a", margin: "8px", borderRadius: "8px" }}>
+                  ⚠ {error}
+                </div>
+              )}
+              {articles.map((a, i) => (
+                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer"
+                  style={{ textDecoration: "none", display: "block" }}
+                >
+                  <div
+                    style={{ padding: "10px 12px", borderBottom: `1px solid ${color.border}`, cursor: "pointer", transition: "background 0.1s" }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "#ffffff06"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                  >
+                    {/* Headline */}
+                    <p style={{
+                      margin: "0 0 5px", fontSize: "12px", color: "#ccc",
+                      lineHeight: "1.45", fontWeight: 500,
+                      display: "-webkit-box", WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical", overflow: "hidden",
+                    }}>{a.title}</p>
+                    {/* Meta row */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span style={{
+                        fontSize: "10px", color: color.accent, fontWeight: 600,
+                        background: color.accent + "18", borderRadius: "4px", padding: "1px 5px",
+                        maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>{a.source?.name || "Source"}</span>
+                      <span style={{ fontSize: "10px", color: "#3a3a3a" }}>{timeSince(a.publishedAt)}</span>
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </WidgetShell>
   );
 }
-
-function ToolBtn({ icon, label, active, onClick, T }) {
-  const [hov, setHov] = useState(false);
-  return (
-    <button
-      onClick={onClick} title={label} data-no-pan="true"
-      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{
-        display: "flex", alignItems: "center", justifyContent: "center",
-        width: "36px", height: "36px", borderRadius: "8px", border: "none",
-        background: active ? "#8b5cf622" : hov ? T.hoverBg : "transparent",
-        color: active ? "#8b5cf6" : hov ? T.text : T.textDim,
-        fontSize: "17px", cursor: "pointer", transition: "all 0.12s",
-        outline: active ? "1.5px solid #8b5cf644" : "none", flexShrink: 0,
-      }}
-    >{icon}</button>
-  );
-}
-
-function Divider({ T }) {
-  return <div style={{ width: "1px", height: "22px", background: T.borderSub, margin: "0 2px", flexShrink: 0 }} />;
-}
-
-function ZoomBtn({ label, onClick, T }) {
-  const [hov, setHov] = useState(false);
-  return (
-    <button
-      onClick={onClick} data-no-pan="true"
-      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{
-        width: "26px", height: "26px",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        background: hov ? T.hoverBg : "transparent",
-        border: `1px solid ${hov ? T.borderSub : T.border}`,
-        borderRadius: "6px", color: hov ? T.text : T.textDim,
-        fontSize: "15px", fontWeight: 600, cursor: "pointer",
-        transition: "all 0.15s", fontFamily: "inherit", lineHeight: 1,
-      }}
-    >{label}</button>
-  );
-}
-
-export default App;
