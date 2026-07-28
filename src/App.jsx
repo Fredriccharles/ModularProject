@@ -9,6 +9,9 @@ import KanbanWidget from "./components/widgets/KanbanWidget.jsx";
 import WhiteboardWidget from "./components/widgets/Whiteboardwidget.jsx";
 import PdfWidget from "./components/widgets/Pdfwidget.jsx";
 import IdeaGeneratorWidget from "./components/widgets/IdeaGeneratorWidget.jsx";
+import VisionBoardWidget from "./components/widgets/Visionboardwidget.jsx";
+import WeatherWidget from "./components/widgets/Weatherwidget.jsx";
+import NewsFeedWidget from "./components/widgets/Newsfeedwidget.jsx";
 import MiniMap from "./components/MiniMap.jsx";
 import { supabase } from "./supabaseClient";
 
@@ -25,6 +28,9 @@ const WIDGET_CATALOGUE = [
   { type: "whiteboard", icon: "🧩",  label: "Draw",    w: 500, h: 400 },
   { type: "pdf",        icon: "📄",  label: "PDF",     w: 520, h: 520 },
   { type: "idea",       icon: "✦",   label: "Ideas",   w: 300, h: 340 },
+  { type: "vision",     icon: "🎯",  label: "Vision",  w: 400, h: 320 },
+  { type: "weather",    icon: "🌦️", label: "Weather", w: 240, h: 220 },
+  { type: "news",       icon: "📰",  label: "News",    w: 300, h: 340 },
 ];
 
 const THEMES = {
@@ -609,6 +615,9 @@ function App({ user, onLogout }) {
               if (w.type === "whiteboard") return <WhiteboardWidget    {...p} />;
               if (w.type === "pdf")        return <PdfWidget           {...p} />;
               if (w.type === "idea")       return <IdeaGeneratorWidget {...p} />;
+              if (w.type === "vision")     return <VisionBoardWidget   {...p} />;
+              if (w.type === "weather")    return <WeatherWidget       {...p} />;
+              if (w.type === "news")       return <NewsFeedWidget      {...p} />;
               return null;
             })}
           </div>
