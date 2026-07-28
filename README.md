@@ -65,46 +65,6 @@ else                          isSelecting.current = true;
 Mutually exclusive by construction — never both. Keyboard shortcuts (`h`,
 `v`/`s`) just call the same `setActiveTool`, so toolbar and keys stay in sync.
 
-## Not hijacking clicks on UI controls
+## Expanding the ESLint configuration
 
-- `.rnd-widget` class on every widget → canvas ignores mousedowns from inside
-  widgets (no accidental pan/select while dragging a widget).
-- `data-no-pan="true"` on every floating button (toolbar, zoom controls,
-  sidebar toggle) → canvas checks `e.target.closest("[data-no-pan]")` and
-  bails, so clicking a button doesn't also start a pan/selection gesture.
-
-One attribute checked in one place, instead of `stopPropagation()` scattered
-across every button.
-
-## Selection → multi-select → group move
-
-- Selection box (screen rect) → converted to world rect on mouseup → simple
-  AABB overlap test against `widgets` → sets `selectedIds`.
-- Shift+click toggles a widget in/out of selection; shift+drag adds a box's
-  hits to the existing selection.
-- Dragging any selected widget while multiple are selected moves all of them
-  together via `updateAllWidgets`, batched into one `setWidgets` call.
-
-## Keyboard shortcuts
-
-| Key | Effect |
-|---|---|
-| Delete/Backspace | Delete selected |
-| Ctrl/Cmd+D | Duplicate selected (+24px offset) |
-| Escape | Clear selection |
-| h | Hand tool |
-| v / s | Select tool |
-
-Ignored while typing in an input/textarea.
-
-## Persistence
-
-Loads the saved workspace row (keyed by `user.id`) on mount; autosaves
-`widgets`/`offset`/`zoom` 1.5s after the last change (debounced), with a
-"Saving… / Saved ✓" indicator in the topbar.
-
-## Adding a new widget type
-
-Add one entry to `WIDGET_CATALOGUE` + one line to the render switch. Drag,
-selection, and persistence all work automatically since every widget gets
-the same `sharedProps`.
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
