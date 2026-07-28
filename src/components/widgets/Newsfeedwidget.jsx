@@ -10,7 +10,7 @@ import { getColor } from "./widgetColors.jsx";
 // ── Configuration ─────────────────────────────────────────────────────────────
 // Replace with your free GNews key from https://gnews.io
 // Free tier: 100 requests/day, no credit card needed.
-const GNEWS_KEY = ""; // ← paste your key here
+const GNEWS_KEY = "2c1111c28644efe17c6cd2087a7ecabd"; // ← paste your key here
 
 const TOPICS = [
   { label: "Top",        value: "breaking-news" },
